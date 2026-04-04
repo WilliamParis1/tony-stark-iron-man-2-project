@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Play a repository MP3 file whenever a clap is detected from the microphone.
+"""Play an MP3 file whenever a clap is detected from the microphone.
 
 Usage:
-    python clap_mp3_trigger.py
+    python clap_mp3_trigger.py --mp3 /path/to/sound.mp3
 """
 
 from __future__ import annotations
@@ -12,29 +12,15 @@ import queue
 import sys
 import threading
 import time
-from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
 from playsound import playsound
 
 
-def find_default_mp3() -> Path | None:
-    """Return the first mp3 file found beside this script (or subfolders)."""
-    script_dir = Path(__file__).resolve().parent
-    mp3_files = sorted(script_dir.glob("**/*.mp3"))
-    return mp3_files[0] if mp3_files else None
-
-
 def parse_args() -> argparse.Namespace:
-    default_mp3 = find_default_mp3()
-
-    parser = argparse.ArgumentParser(description="Play an MP3 in this repo when you clap.")
-    parser.add_argument(
-        "--mp3",
-        default=str(default_mp3) if default_mp3 else None,
-        help="Path to MP3 file to play (defaults to first .mp3 found in this repo).",
-    )
+    parser = argparse.ArgumentParser(description="Play an MP3 when you clap.")
+    parser.add_argument("--mp3", required=True, help="Path to MP3 file to play")
     parser.add_argument(
         "--threshold",
         type=float,
@@ -59,19 +45,7 @@ def parse_args() -> argparse.Namespace:
         default=2048,
         help="Microphone frame size per callback.",
     )
-    args = parser.parse_args()
-
-    if not args.mp3:
-        parser.error(
-            "No MP3 file found in this repository. Add an .mp3 file or pass --mp3 /path/to/file.mp3"
-        )
-
-    mp3_path = Path(args.mp3).resolve()
-    if not mp3_path.exists() or mp3_path.suffix.lower() != ".mp3":
-        parser.error(f"Invalid mp3 path: {args.mp3}")
-
-    args.mp3 = str(mp3_path)
-    return args
+    return parser.parse_args()
 
 
 def start_player(mp3_path: str) -> queue.Queue:
@@ -99,11 +73,8 @@ def main() -> int:
 
     last_trigger_time = 0.0
 
-    print(f"Using MP3: {args.mp3}")
-
     def callback(indata: np.ndarray, frames: int, cb_time, status) -> None:  # type: ignore[no-untyped-def]
         nonlocal last_trigger_time
-        del frames, cb_time
         if status:
             print(f"Input stream status: {status}", file=sys.stderr)
 
