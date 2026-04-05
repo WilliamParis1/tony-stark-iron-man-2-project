@@ -8,7 +8,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import queue
+import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -16,7 +19,6 @@ from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
-import pygame
 
 
 def find_default_mp3() -> Path | None:
@@ -74,21 +76,53 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def _mci_send(command: str) -> None:
+    """Send an MCI command on Windows and raise a descriptive error on failure."""
+    error_code = ctypes.windll.winmm.mciSendStringW(command, None, 0, 0)
+    if error_code != 0:
+        buffer = ctypes.create_unicode_buffer(255)
+        ctypes.windll.winmm.mciGetErrorStringW(error_code, buffer, 255)
+        raise RuntimeError(f"MCI failed for '{command}': {buffer.value}")
+
+
+def play_mp3(mp3_path: str) -> None:
+    """Play mp3 without third-party playback dependencies.
+
+    - On Windows: uses built-in WinMM/MCI (works for mp3).
+    - Else: tries ffplay if available.
+    """
+    if sys.platform == "win32":
+        alias = "clap_mp3"
+        # Best effort close if previously open.
+        try:
+            _mci_send(f"close {alias}")
+        except RuntimeError:
+            pass
+
+        _mci_send(f'open "{mp3_path}" type mpegvideo alias {alias}')
+        _mci_send(f"play {alias} from 0")
+        return
+
+    ffplay_cmd = f"ffplay -nodisp -autoexit -loglevel quiet {shlex.quote(mp3_path)}"
+    subprocess.Popen(ffplay_cmd, shell=True)  # noqa: S602
+
+
 def start_player(mp3_path: str) -> queue.Queue:
     events: queue.Queue[str] = queue.Queue()
-
-    pygame.mixer.init()
-    clap_sound = pygame.mixer.Sound(mp3_path)
 
     def worker() -> None:
         while True:
             message = events.get()
             if message == "STOP":
-                pygame.mixer.quit()
+                if sys.platform == "win32":
+                    try:
+                        _mci_send("close clap_mp3")
+                    except RuntimeError:
+                        pass
                 return
             if message == "PLAY":
                 try:
-                    clap_sound.play()
+                    play_mp3(mp3_path)
                 except Exception as exc:  # noqa: BLE001
                     print(f"Playback error: {exc}", file=sys.stderr)
 
@@ -102,9 +136,10 @@ def main() -> int:
     player_events = start_player(args.mp3)
 
     last_trigger_time = 0.0
+    backend = "windows-mci" if sys.platform == "win32" else "ffplay"
 
     print(f"Using MP3: {args.mp3}")
-    print("Playback backend: pygame")
+    print(f"Playback backend: {backend}")
 
     def callback(indata: np.ndarray, frames: int, cb_time, status) -> None:  # type: ignore[no-untyped-def]
         nonlocal last_trigger_time
