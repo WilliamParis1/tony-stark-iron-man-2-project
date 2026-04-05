@@ -148,6 +148,24 @@ def start_player(mp3_path: str) -> queue.Queue:
     return events
 
 
+def start_keyboard_trigger(player_events: queue.Queue) -> None:
+    """Optional helper: Enter key can trigger playback while mic mode runs."""
+
+    def worker() -> None:
+        print("Keyboard trigger enabled: press Enter to play immediately.")
+        while True:
+            try:
+                typed = input().strip().lower()
+            except EOFError:
+                return
+            if typed in {"q", "quit", "exit"}:
+                return
+            player_events.put("PLAY")
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+
 def run_manual_trigger_loop(player_events: queue.Queue) -> int:
     """Fallback mode for environments with no microphone (e.g., github.dev)."""
     print("Manual mode: press Enter to simulate a clap, type 'q' then Enter to quit.")
@@ -180,6 +198,9 @@ def main() -> int:
 
     print(f"Using MP3: {args.mp3}")
     print(f"Playback backend: {backend}")
+
+    if sys.stdin.isatty():
+        start_keyboard_trigger(player_events)
 
     if args.stdin_trigger:
         try:
