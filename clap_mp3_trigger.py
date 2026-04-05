@@ -187,7 +187,15 @@ def main() -> int:
         finally:
             player_events.put("STOP")
 
-    sd = get_sounddevice_module()
+    try:
+        sd = get_sounddevice_module()
+    except RuntimeError as exc:
+        print(f"{exc}\nSwitching to manual trigger mode automatically.", file=sys.stderr)
+        try:
+            return run_manual_trigger_loop(player_events)
+        finally:
+            player_events.put("STOP")
+
     input_device = find_default_input_device(sd)
     if input_device is None:
         print(
