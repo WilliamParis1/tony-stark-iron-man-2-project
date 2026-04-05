@@ -61,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         default=2048,
         help="Microphone frame size per callback.",
     )
+    parser.add_argument(
+        "--stdin-trigger",
+        action="store_true",
+        help="Use Enter key presses as clap triggers (good for github.dev/codespaces).",
+    )
     args = parser.parse_args()
 
     if not args.mp3:
@@ -143,6 +148,20 @@ def start_player(mp3_path: str) -> queue.Queue:
     return events
 
 
+def run_manual_trigger_loop(player_events: queue.Queue) -> int:
+    """Fallback mode for environments with no microphone (e.g., github.dev)."""
+    print("Manual mode: press Enter to simulate a clap, type 'q' then Enter to quit.")
+    while True:
+        try:
+            typed = input().strip().lower()
+        except EOFError:
+            break
+        if typed in {"q", "quit", "exit"}:
+            break
+        player_events.put("PLAY")
+    return 0
+
+
 def find_default_input_device(sd_module) -> int | None:
     """Return an input-capable device index, or None if none exists."""
     devices = sd_module.query_devices()
@@ -154,16 +173,6 @@ def find_default_input_device(sd_module) -> int | None:
 
 def main() -> int:
     args = parse_args()
-    sd = get_sounddevice_module()
-    input_device = find_default_input_device(sd)
-    if input_device is None:
-        print(
-            "No microphone/input audio device is available in this environment. "
-            "Run this script on a machine with a mic (or attach one) and try again.",
-            file=sys.stderr,
-        )
-        return 1
-
     player_events = start_player(args.mp3)
 
     last_trigger_time = 0.0
@@ -171,6 +180,25 @@ def main() -> int:
 
     print(f"Using MP3: {args.mp3}")
     print(f"Playback backend: {backend}")
+
+    if args.stdin_trigger:
+        try:
+            return run_manual_trigger_loop(player_events)
+        finally:
+            player_events.put("STOP")
+
+    sd = get_sounddevice_module()
+    input_device = find_default_input_device(sd)
+    if input_device is None:
+        print(
+            "No microphone/input audio device is available in this environment. "
+            "Switching to manual trigger mode automatically.",
+            file=sys.stderr,
+        )
+        try:
+            return run_manual_trigger_loop(player_events)
+        finally:
+            player_events.put("STOP")
 
     def callback(indata: np.ndarray, frames: int, cb_time, status) -> None:  # type: ignore[no-untyped-def]
         nonlocal last_trigger_time
