@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import importlib
 import queue
 import shlex
 import subprocess
@@ -18,7 +19,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
 
 
 def find_default_mp3() -> Path | None:
@@ -76,6 +76,18 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def get_sounddevice_module():
+    """Load sounddevice lazily so missing PortAudio shows a clear setup error."""
+    try:
+        return importlib.import_module("sounddevice")
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "sounddevice could not start because PortAudio is missing. "
+            "Install system audio libs first (example Ubuntu: sudo apt-get update && "
+            "sudo apt-get install -y libportaudio2 portaudio19-dev) then reinstall requirements."
+        ) from exc
+
+
 def _mci_send(command: str) -> None:
     """Send an MCI command on Windows and raise a descriptive error on failure."""
     error_code = ctypes.windll.winmm.mciSendStringW(command, None, 0, 0)
@@ -131,8 +143,27 @@ def start_player(mp3_path: str) -> queue.Queue:
     return events
 
 
+def find_default_input_device(sd_module) -> int | None:
+    """Return an input-capable device index, or None if none exists."""
+    devices = sd_module.query_devices()
+    for idx, dev in enumerate(devices):
+        if dev.get("max_input_channels", 0) > 0:
+            return idx
+    return None
+
+
 def main() -> int:
     args = parse_args()
+    sd = get_sounddevice_module()
+    input_device = find_default_input_device(sd)
+    if input_device is None:
+        print(
+            "No microphone/input audio device is available in this environment. "
+            "Run this script on a machine with a mic (or attach one) and try again.",
+            file=sys.stderr,
+        )
+        return 1
+
     player_events = start_player(args.mp3)
 
     last_trigger_time = 0.0
@@ -159,6 +190,7 @@ def main() -> int:
 
     try:
         with sd.InputStream(
+            device=input_device,
             channels=1,
             callback=callback,
             samplerate=args.samplerate,
